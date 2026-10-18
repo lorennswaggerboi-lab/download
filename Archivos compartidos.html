@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Archivos compartidos</title>
+<style>
+:root{--bg:#f6f7fb;--card:#fff;--tx:#1b1e27;--mu:#6b7280;--ac:#5b5bd6;--bd:#e3e5ee;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#14151a;--card:#1e2028;--tx:#eceef5;--mu:#9aa0b2;--ac:#8b8bf0;--bd:#2d303b;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#14151a;--card:#1e2028;--tx:#eceef5;--mu:#9aa0b2;--ac:#8b8bf0;--bd:#2d303b;color-scheme:dark}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;line-height:1.45}
+main{max-width:680px;margin:0 auto;padding:20px 16px 48px}
+h1{font-size:1.5rem;margin:8px 0 4px}
+.sub{color:var(--mu);margin:0 0 20px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:14px;margin-bottom:14px}
+textarea{width:100%;border:1px solid var(--bd);border-radius:10px;padding:10px;background:transparent;color:var(--tx);font:inherit;resize:vertical;min-height:60px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}
+button,.btn{background:var(--ac);color:#fff;border:0;border-radius:10px;padding:9px 14px;font:inherit;cursor:pointer}
+button.ghost{background:transparent;color:var(--mu);border:1px solid var(--bd)}
+button:disabled{opacity:.5;cursor:default}
+.drop{border:2px dashed var(--bd);border-radius:12px;padding:18px;text-align:center;color:var(--mu);cursor:pointer}
+.drop.on{border-color:var(--ac);color:var(--ac)}
+.meta{color:var(--mu);font-size:.85rem}
+.file{display:flex;gap:10px;align-items:center;margin-top:10px;padding:10px;border:1px solid var(--bd);border-radius:10px}
+.ico{font-size:1.6rem}
+.fn{font-weight:600;word-break:break-all}
+.grow{flex:1;min-width:0}
+.prev{max-width:100%;max-height:360px;border-radius:10px;display:block;margin-top:10px}
+.msg{color:var(--mu);text-align:center;padding:24px}
+.err{color:#d33;font-size:.9rem;margin-top:8px}
+</style>
+</head>
+<body>
+<main>
+  <h1>📁 Archivos compartidos</h1>
+  <p class="sub">Subí un archivo y aparece como publicación. Cualquiera puede descargarlo.</p>
+
+  <section class="card" id="up" hidden>
+    <div class="drop" id="drop">Tocá acá o arrastrá un archivo<br><span class="meta">Imágenes, videos, PDF, CSV, JSON, Markdown o texto · hasta 20 MB</span></div>
+    <input type="file" id="pick" hidden accept="image/*,video/*,.pdf,.csv,.json,.md,.txt">
+    <div id="sel" class="file" hidden><span class="ico" id="selI"></span><div class="grow"><div class="fn" id="selN"></div><div class="meta" id="selS"></div></div><button class="ghost" id="clr">Quitar</button></div>
+    <textarea id="cap" placeholder="Escribí algo sobre el archivo (opcional)" style="margin-top:10px"></textarea>
+    <div class="row"><button id="pub" disabled>Publicar</button><span class="meta" id="st"></span></div>
+    <div class="err" id="err"></div>
+  </section>
+
+  <div id="feed"><div class="msg">Cargando…</div></div>
+</main>
+
+<script>
+const $=s=>document.querySelector(s);
+const TYPES={png:"image/png",jpg:"image/jpeg",jpeg:"image/jpeg",gif:"image/gif",webp:"image/webp",svg:"image/svg+xml",mp4:"video/mp4",webm:"video/webm",pdf:"application/pdf",csv:"text/csv",json:"application/json",md:"text/markdown",txt:"text/plain"};
+let assets=null,db=null,downloads=null,user=null,me=null,canEdit=false,file=null;
+
+const ext=n=>(n.split(".").pop()||"").toLowerCase();
+const fmt=b=>b<1024?b+" B":b<1048576?(b/1024).toFixed(1)+" KB":(b/1048576).toFixed(1)+" MB";
+const icon=t=>t.startsWith("image/")?"🖼️":t.startsWith("video/")?"🎬":t==="application/pdf"?"📕":"📄";
+const esc=s=>{const d=document.createElement("div");d.textContent=s;return d.innerHTML};
+
+async function use(n){try{return await claude.use(n)}catch(e){return null}}
+
+async function init(){
+  [assets,db,downloads,user]=await Promise.all([use("assets"),use("db"),use("downloads"),use("user")]);
+  try{if(user){me=await user.id();canEdit=!!user.canEdit()}}catch(e){}
+  if(assets&&db)$("#up").hidden=false;
+  if(!db){$("#feed").innerHTML='<div class="msg">Iniciá sesión en Claude para ver y subir publicaciones.</div>';return}
+  db.collection("posts").orderBy("ts","desc").onSnapshot(snap=>render(snap.docs),e=>{$("#feed").innerHTML='<div class="msg">No se pudieron cargar las publicaciones.</div>'});
+}
+
+function render(docs){
+  const feed=$("#feed");
+  if(!docs.length){feed.innerHTML='<div class="msg">Todavía no hay publicaciones. ¡Subí la primera!</div>';return}
+  feed.innerHTML="";
+  docs.forEach(d=>{
+    const p=d.data();if(!p)return;
+    const c=document.createElement("article");c.className="card";
+    const url="/_blob/"+p.assetId;
+    let prev="";
+    if(p.type.startsWith("image/"))prev='<img class="prev" loading="lazy" alt="">';
+    else if(p.type.startsWith("video/"))prev='<video class="prev" controls preload="metadata"></video>';
+    c.innerHTML=(p.caption?'<div></div>':"")+prev+
+      '<div class="file"><span class="ico">'+icon(p.type)+'</span><div class="grow"><div class="fn"></div><div class="meta"></div></div><button class="dl">Descargar</button></div><div class="err"></div>'+
+      '<div class="row"><span class="meta grow"></span></div>';
+    if(p.caption)c.firstChild.textContent=p.caption;
+    const im=c.querySelector("img,video");if(im)im.src=url;
+    c.querySelector(".fn").textContent=p.name;
+    c.querySelector(".file .meta").textContent=fmt(p.size);
+    c.querySelector(".row .meta").textContent=new Date(p.ts).toLocaleString("es-AR",{dateStyle:"medium",timeStyle:"short"});
+    const err=c.querySelector(".err");
+    c.querySelector(".dl").onclick=async e=>{
+      const b=e.target;err.textContent="";
+      if(!downloads){err.textContent="La descarga no está disponible en esta vista.";return}
+      b.disabled=true;
+      try{const r=await fetch(url);const blob=await r.blob();await downloads.save({filename:p.name,data:blob})}
+      catch(x){if(!x||x.code!=="declined")err.textContent=x&&x.code==="rejected_extension"?"Este tipo de archivo no se puede descargar desde acá.":"No se pudo descargar. Probá de nuevo."}
+      b.disabled=false;
+    };
+    if(canEdit||(me&&p.authorId===me)){
+      const x=document.createElement("button");x.className="ghost";x.textContent="Eliminar";
+      x.onclick=async()=>{if(!confirm("¿Eliminar esta publicación?"))return;
+        try{await db.collection("posts").doc(d.id).delete();try{await assets.delete(p.assetId)}catch(e){}}catch(e){err.textContent="No se pudo eliminar."}};
+      c.querySelector(".row").appendChild(x);
+    }
+    feed.appendChild(c);
+  });
+}
+
+function setFile(f){
+  $("#err").textContent="";
+  if(!f){file=null;$("#sel").hidden=true;$("#pub").disabled=true;return}
+  if(!TYPES[ext(f.name)]){$("#err").textContent="Tipo de archivo no admitido. Usá imágenes, videos, PDF, CSV, JSON, Markdown o texto.";return}
+  if(f.size>20*1048576){$("#err").textContent="El archivo supera los 20 MB.";return}
+  file=f;const t=TYPES[ext(f.name)];
+  $("#selI").textContent=icon(t);$("#selN").textContent=f.name;$("#selS").textContent=fmt(f.size);
+  $("#sel").hidden=false;$("#pub").disabled=false;
+}
+$("#drop").onclick=()=>$("#pick").click();
+$("#pick").onchange=e=>{setFile(e.target.files[0]);e.target.value=""};
+$("#clr").onclick=()=>setFile(null);
+["dragover","dragenter"].forEach(ev=>$("#drop").addEventListener(ev,e=>{e.preventDefault();$("#drop").classList.add("on")}));
+["dragleave","drop"].forEach(ev=>$("#drop").addEventListener(ev,e=>{e.preventDefault();$("#drop").classList.remove("on")}));
+$("#drop").addEventListener("drop",e=>setFile(e.dataTransfer.files[0]));
+
+$("#pub").onclick=async()=>{
+  if(!file)return;
+  $("#pub").disabled=true;$("#st").textContent="Subiendo…";$("#err").textContent="";
+  try{
+    const type=TYPES[ext(file.name)];
+    const r=await assets.upload(file,{type});
+    await db.collection("posts").add({name:file.name,assetId:r.id,size:r.sizeBytes,type:r.contentType||type,caption:$("#cap").value.trim(),authorId:me||"",ts:Date.now()});
+    $("#cap").value="";setFile(null);$("#st").textContent="";
+  }catch(e){$("#err").textContent="No se pudo publicar"+(e&&e.message?": "+e.message:".");$("#st").textContent="";$("#pub").disabled=false}
+};
+init();
+</script>
+</body>
+</html>
